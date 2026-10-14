@@ -4,6 +4,8 @@
 import argparse
 import copy
 import hashlib
+import json
+import math
 import os
 from pathlib import Path
 import re
@@ -166,6 +168,54 @@ def wait_for_px4(log_path, processes, require_gcs):
     raise RuntimeError("PX4 did not become ready within 90 seconds; inspect px4.log.")
 
 
+def configure_speed(env):
+    """Use the running SITL's horizontal cap for cruise and Position mode."""
+    command = str(BUILD_DIR / "bin/px4-param")
+
+    def read_parameter(name):
+        result = subprocess.run([command, "show", "-q", name], cwd=REPO_ROOT,
+                                env=env, capture_output=True, text=True, timeout=10, check=True)
+        return float(result.stdout.strip())
+
+    maximum = read_parameter("MPC_XY_VEL_MAX")
+    if not math.isfinite(maximum) or maximum <= 0 or maximum > 20:
+        raise RuntimeError("SITL horizontal limit is outside the demo's supported 0–20 m/s range.")
+    for name in ("MPC_XY_CRUISE", "MPC_VEL_MANUAL"):
+        subprocess.run([command, "set", name, str(maximum)], cwd=REPO_ROOT, env=env,
+                       capture_output=True, text=True, timeout=10, check=True)
+        if not math.isclose(read_parameter(name), maximum, abs_tol=0.001):
+            raise RuntimeError(f"Could not confirm demo speed parameter {name}.")
+    print(f"Horizontal cruise and Position speed: {maximum:g} m/s (configured maximum).", flush=True)
+
+
+def configure_camera(env):
+    """Retry until the renderer reports the requested target, offset and gain."""
+    result = subprocess.run(["gz", "service", "-s", "/gui/follow", "--reqtype", "gz.msgs.StringMsg",
+                             "--reptype", "gz.msgs.Boolean", "--timeout", "2000",
+                             "--req", f'data: "{MODEL_NAME}"'], env=env, capture_output=True,
+                            text=True, timeout=5, check=True)
+    # gz can exit successfully even when its service request times out.
+    if "data: true" not in result.stdout:
+        return False
+    request = (f'track_mode: FOLLOW, follow_target: {{name: "{MODEL_NAME}"}}, '
+               'follow_offset: {x: -3, y: -3, z: 2}, follow_pgain: 1, track_pgain: 1')
+    subprocess.run(["gz", "topic", "-t", "/gui/track", "-m", "gz.msgs.CameraTrack", "-p", request],
+                   env=env, capture_output=True, timeout=5, check=True)
+    result = subprocess.run(["gz", "topic", "-e", "--json-output", "-t", "/gui/currently_tracked",
+                             "-d", "1"], env=env, capture_output=True, text=True, timeout=5, check=True)
+    for line in result.stdout.splitlines():
+        try:
+            status = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (status.get("trackMode") == "FOLLOW"
+                and status.get("followTarget", {}).get("name") == MODEL_NAME
+                and status.get("followOffset") == {"x": -3, "y": -3, "z": 2}
+                and status.get("followPgain") == 1):
+            return True
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="Build PX4 SITL before launching")
@@ -229,14 +279,14 @@ def main():
         if not args.no_qgc:
             subprocess.run(["open", "-a", str(qgc)], check=True)
         wait_for_px4(run_dir / "px4.log", processes, not args.no_qgc)
+        configure_speed(env)
         # Finish the PX4 startup service requests before the GUI requests the
         # scene. Concurrent startup requests can stall Gazebo transport on Mac.
         if not args.headless:
-            start_process(["gz", "sim", "-g", "-v", "3", "--gui-config", str(DEMO_DIR / "gui.config")],
-                          run_dir / "gui.log", env, processes)
+            gui = start_process(["gz", "sim", "-g", "-v", "3", "--gui-config", str(DEMO_DIR / "gui.config")],
+                                run_dir / "gui.log", env, processes)
         camera_configured = args.headless
-        camera_request = (f'track_mode: FOLLOW, follow_target: {{name: "{MODEL_NAME}"}}, '
-                          'follow_offset: {x: -1.5, y: -1.5, z: 1.5}, follow_pgain: 1, track_pgain: 1')
+        gui_activated = args.headless
         print("PX4 started. Check Ready to Fly in QGroundControl before taking off. "
               "Press Ctrl+C here to stop the demo.", flush=True)
         while all(process.poll() is None for process in processes):
@@ -246,11 +296,26 @@ def main():
             if not camera_configured:
                 gui_text = (run_dir / "gui.log").read_text(errors="replace")
                 gui_text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", gui_text)
-                if "Camera pose topic advertised" in gui_text:
-                    subprocess.run(["gz", "topic", "-t", "/gui/track", "-m", "gz.msgs.CameraTrack",
-                                    "-p", camera_request], env=env, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=10, check=True)
-                    camera_configured = True
+                if not gui_activated and "Currently tracking topic" in gui_text:
+                    # macOS can withhold render events from an obscured window.
+                    # Activate our GUI once it has registered its plugins.
+                    script = ('ObjC.import("AppKit"); '
+                              f'$.NSRunningApplication.runningApplicationWithProcessIdentifier({gui.pid})'
+                              '.activateWithOptions(3)')
+                    try:
+                        activation = subprocess.run(["osascript", "-l", "JavaScript", "-e", script],
+                                                    capture_output=True, text=True, timeout=5)
+                        gui_activated = activation.stdout.strip() == "true"
+                    except subprocess.TimeoutExpired:
+                        pass
+                if "Currently tracking topic" in gui_text:
+                    try:
+                        camera_configured = configure_camera(env)
+                    except subprocess.SubprocessError:
+                        # A GUI still initialising may not answer immediately.
+                        camera_configured = False
+                    if camera_configured:
+                        print("Camera following confirmed for x500_0.", flush=True)
             time.sleep(0.5)
         raise RuntimeError("A demo process closed; stopping the remaining simulation processes.")
     finally:

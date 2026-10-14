@@ -3,6 +3,14 @@
 Run a repeatable PX4 SITL demonstration on macOS with a bright yellow X500, orange propellers, blue sky and a pale ground grid.
 The grid covers 500 × 500 metres around the takeoff point, with 2-metre cells and darker 10-metre lines.
 The camera follows the drone while the ground provides a stationary reference for movement.
+Following is retried until Gazebo reports the drone target and the requested camera settings.
+The camera uses a three-metre offset in each horizontal direction and stays two
+metres above the drone. The horizontal offset rotates with the drone's heading.
+On every launch, horizontal autonomous cruise (`MPC_XY_CRUISE`) and Position-mode
+speed (`MPC_VEL_MANUAL`) are set to the running SITL's `MPC_XY_VEL_MAX` and read back
+for confirmation. With the current X500 configuration this is 12 m/s (43.2 km/h).
+This is a target speed; acceleration, turns and mission-specific speed commands affect actual speed.
+Vertical speed limits are unchanged.
 
 The demo uses the upstream X500 mass, inertia, joints, collisions, sensors and four normal motor plugins.
 It changes visual materials and adds a visual-only yellow panel and ground texture.
@@ -169,7 +177,24 @@ Use the provided launcher rather than launching an empty `gz gui` shell.
 It supplies the GUI plugins, matching local transport settings and the PX4 sensor configuration.
 The display remains a normal Gazebo GUI window even if the macOS menu calls the hosting process `ruby`.
 Bring the Gazebo window forward if it is obscured; macOS can defer rendering in a background window.
-The launcher configures camera following when the renderer initialises, including after a delayed window activation.
+The launcher brings its Gazebo window forward once the GUI plugins initialise,
+then requests following and verifies Gazebo's reported tracking settings.
+Wait for `Camera following confirmed for x500_0.` in the launcher output.
+Keep Gazebo playing during flight: pausing its clock stops PX4 lockstep updates and
+can make QGroundControl report communication lost. Press Play to resume.
+
+### Simulation Clock Freezes And QGroundControl Loses Communication
+
+This installation has also exhibited a Gazebo Transport stall after a successful
+startup and flight. A server thread sample showed the simulation thread waiting
+for a transport mutex while `NodeShared::RecvSrvRequest` blocked receiving a
+service request. The cause of that request stall remains unresolved; the camera
+and speed defaults do not fix it.
+
+Distinguish this from Pause: in this failure, Gazebo stops publishing world stats
+and does not acknowledge an unpause request. A clean launcher restart recovered
+the local demo. A successful short flight is not evidence of long-run stability.
+Preserve the run's logs before restarting if this happens again.
 
 ### Dependencies Or ABI Changed
 
@@ -189,4 +214,7 @@ The original large ground plane remains beneath the visual grid, so the grid doe
 The launcher was exercised on the existing Apple Silicon installation with its existing PX4 SITL build.
 Asset generation, the rendered yellow drone and pale grid, PX4 readiness with QGroundControl, refusal of a duplicate launch, and process/lock cleanup after `Ctrl+C` were checked.
 Shell syntax and Python compilation checks also passed.
+A clean restart with automatic camera following and 12 m/s parameter readback
+was checked. After a simulated 20-metre flight, the camera remained at its
+requested distance and pointed at the drone; PX4 retained its GCS connection.
 Fresh-machine dependency installation, the optional rebuild flag and Intel execution have not been exercised as part of this example.
