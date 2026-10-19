@@ -1,0 +1,60 @@
+# Apply after collision-prevention-patch.yaml and building the planner image.
+spec:
+  # One simulator instance; replacing it deliberately resets its temporary state.
+  # Recreate also avoids requiring space for two simulator pods during rollout.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  template:
+    spec:
+      containers:
+        - name: px4-gazebo
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+          env:
+            - name: PX4_PARAM_COM_OF_LOSS_T
+              value: "0.5"
+            - name: PX4_PARAM_COM_OBL_RC_ACT
+              value: "5"
+          volumeMounts:
+            - name: planner-sensor-bridge
+              mountPath: /etc/px4-planner
+              readOnly: true
+        - name: course-planner
+          image: image-registry.openshift-image-registry.svc:5000/px4-loki-gazebo-demo/px4-course-planner:latest
+          imagePullPolicy: Always
+          ports:
+            - name: planner-http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: collision-prevention-startup
+              mountPath: /etc/px4-demo
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: planner-http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: planner-sensor-bridge
+          configMap:
+            name: px4-planner-sensor-bridge
