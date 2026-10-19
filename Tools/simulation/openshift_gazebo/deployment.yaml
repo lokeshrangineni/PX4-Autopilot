@@ -62,6 +62,7 @@ spec:
           args:
             - -e
             - 127.0.0.1:18570
+            - 127.0.0.1:14550
           ports:
             - name: mavlink-tcp
               containerPort: 5760

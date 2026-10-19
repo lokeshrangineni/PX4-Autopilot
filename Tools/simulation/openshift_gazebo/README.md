@@ -23,7 +23,9 @@ Gazebo GUI ◄──────────── VPN / overlay ─────
 ```
 
 The router accepts QGroundControl's TCP connection and relays MAVLink to PX4
-over Pod-local UDP. The workstation does not need a public UDP listener or an
+over Pod-local UDP. It listens on `127.0.0.1:14550` for PX4 telemetry while
+the `-e 127.0.0.1:18570` endpoint forwards controller messages to PX4. The
+workstation does not need a public UDP listener or an
 external UDP load balancer. `oc port-forward` provides a temporary authenticated
 TCP path to the Pod.
 
@@ -98,10 +100,52 @@ tunnel; QGC may require a manual reconnect after recovery.
 The port-forward carries TCP only. It does not provide access to Gazebo
 Transport or expose a Gazebo GUI.
 
+## Open the Gazebo GUI in a browser
+
+The optional VNC profile runs a Gazebo GUI client in a sidecar, joins the
+headless server through the pod-local Gazebo Transport partition, and serves
+noVNC over HTTP. An OpenShift HTTPS Route exposes the browser client. The VNC
+server itself listens only on pod-local loopback; it is not exposed by the
+Service or Route.
+
+Build the small GUI sidecar image:
+
+```sh
+oc apply -f Tools/simulation/openshift_gazebo/gazebo-vnc-build.yaml \
+  -n px4-loki-gazebo-demo
+oc start-build px4-gazebo-vnc -n px4-loki-gazebo-demo \
+  --from-dir=Tools/simulation/openshift_gazebo/gazebo-vnc --follow
+```
+
+Apply the optional sidecar and browser Route:
+
+```sh
+oc patch deployment px4-gazebo-sitl -n px4-loki-gazebo-demo \
+  --type=strategic \
+  --patch-file Tools/simulation/openshift_gazebo/gazebo-vnc-patch.yaml
+oc apply -f Tools/simulation/openshift_gazebo/gazebo-vnc-service-route.yaml \
+  -n px4-loki-gazebo-demo
+oc rollout status deployment/px4-gazebo-sitl -n px4-loki-gazebo-demo
+oc get route px4-gazebo-vnc -n px4-loki-gazebo-demo
+```
+
+Open the Route host with `/vnc.html?autoconnect=true&resize=scale&path=websockify`;
+no VNC password is required. The route uses edge TLS and redirects HTTP to
+HTTPS, but the VNC desktop has no authentication. Restrict the Route to the
+trusted VPN/client CIDR using the Ingress Controller's
+`haproxy.router.openshift.io/ip_whitelist` annotation, or ensure the cluster's
+route domain is private. Remove the profile by deleting the Route and Service,
+then removing the `gazebo-vnc` container and `gazebo-vnc-tmp` volume from the
+Deployment.
+
 ## LiDAR collision prevention (Position mode)
 
 The optional profile replaces `gz_x500` with PX4's bundled
-`gz_x500_lidar_2d` model and uses a lightweight synthetic obstacle course.
+`gz_x500_lidar_2d` model in an open 500 × 500 m world. Its yellow X500, pale
+2 m grid, blue sky, and following camera match the local Mac Gazebo demo. The
+LiDAR and collision-prevention parameters remain enabled; no walls are modeled.
+The startup script generates the grid and yellow model override in the shared
+temporary volume, which the GUI sidecar also mounts for rendering.
 Gazebo feeds its horizontal laser scan directly into
 PX4's `obstacle_distance` topic through `gz_bridge`; no ROS bridge is needed.
 The startup script launches Gazebo with EGL headless rendering and Mesa software
@@ -131,13 +175,13 @@ same namespace to restart the processes with the new script. To revert, inspect
 `oc rollout history deployment/px4-gazebo-sitl` and undo to the revision that
 used the original `gz_x500` profile, using `--to-revision` in the same namespace.
 
-The course has a wall 15 m east of spawn (6 m high), and a building centred
-20 m north of spawn (8 m high). These are known, simple collision obstacles.
-Its geographic origin matches Baylands, but its geometry does **not** match
-QGC satellite imagery. Baylands with software-rendered LiDAR ran at about
-0.03 real-time factor on the current CPU node; use the course for initial
-checks. Detailed scenes need rendering optimisation or a GPU-enabled node
-and a separately configured hardware rendering profile.
+The world keeps the course's geographic origin for PX4 local/global position
+checks, but has no modeled obstacles and does **not** match QGC satellite
+imagery. The 500 × 500 m ground grid is a visual reference, not a fence; stay
+inside the simulated ground area. Software-rendered LiDAR may run slower than
+real time on CPU-only nodes; inspect Gazebo's `/world/avoidance_course/stats`
+before flight. Detailed scenes need rendering optimisation or a GPU-enabled
+node and a separately configured hardware rendering profile.
 
 The profile sets `CP_DIST=3` metres, `CP_DELAY=0.4` seconds,
 `CP_GO_NO_DATA=0`, `CP_GUIDE_ANG=30` degrees, `MPC_POS_MODE=4` (acceleration
@@ -164,23 +208,24 @@ oc exec deployment/px4-gazebo-sitl -n px4-loki-gazebo-demo -c px4-gazebo -- \
 The timestamp should advance and distances should contain valid measurements
 rather than only `65535` (unknown). A no-return measurement beyond maximum range
 is also valid. Pod readiness alone does not confirm that the renderer or sensor
-is working. Start with a short, slow flight toward a known obstacle and confirm
-that PX4 stops before the configured margin. This flight check must be completed
-before treating the profile as validated. If scan data is lost, Position mode
-restricts horizontal motion and subsequently switches to Hold.
+is working. This open-area world contains no obstacle to fly toward; add a known
+simulated object before checking that PX4 stops before the configured margin.
+If scan data is lost, Position mode restricts horizontal motion and subsequently
+switches to Hold.
 
 Automatic rerouting for map-selected destinations requires a separately designed
 companion planner that owns the trajectory and flight-mode transitions. PX4's
 older mission path-planning interface is
 [no longer supported](https://docs.px4.io/main/en/computer_vision/path_planning_interface).
 
-## Automatic destinations in the synthetic obstacle course
+## Automatic destinations in the open flight area
 
 The optional `course-planner` sidecar adds a local map for route previews and
-explicitly starting a route. It uses A* on a 1 m grid, with 4.5 m obstacle
-inflation, and reads the static, unrotated box geometry from the same course SDF
-as Gazebo. It is a bounded, fixed-altitude simulation example, **not** a general
-Baylands planner, SLAM system, or three-dimensional avoidance stack.
+explicitly starting a route. The map spans ±250 m in each direction and uses
+A* on a 1 m grid. It reads any static, unrotated box geometry from the same SDF
+as Gazebo; this open-area version contains none. It is a bounded, fixed-altitude
+simulation example, **not** a general Baylands planner, SLAM system, or
+three-dimensional avoidance stack.
 
 The native Gazebo scan is relayed over pod-local UDP by `sensor_bridge.py`.
 This is necessary because PX4's MAVLink `OBSTACLE_DISTANCE` stream publishes
@@ -216,9 +261,8 @@ to this example project.
 1. Connect QGC. Keep the simulated vehicle disarmed while inspecting route
    previews; no preview or telemetry request starts flight.
 2. Select a destination on the **planner map** and click **Preview route**.
-   North is up and east is right. Destinations outside ±40 m or inside inflated
-   obstacles are rejected. A destination north 0 m, east 25 m lies behind the
-   east wall and should produce a route around a wall end.
+   North is up and east is right. Destinations outside ±250 m or inside an
+   inflated obstacle are rejected. The UI grid scales to the larger area.
 3. Arm and take off using QGC, then hover in Hold between 2 and 5 m above the
    course origin. The planner never arms or takes off.
 4. Preview again, then click **Start automatic route**. The planner checks
@@ -234,7 +278,9 @@ continues to display telemetry and provide flight-mode, takeoff, and land contro
 
 The planner turns toward travel before moving, checks a forward travel cone
 against the raw horizontal scan, and requests Hold if an obstacle is closer
-than 3.5 m. Stale position, attitude, global position, or scan data stops the
+than 3.5 m. The map contains no modeled walls, so routes in this profile are
+straight across open space; a LiDAR obstruction stops the route for operator
+inspection. Stale position, attitude, global position, or scan data stops the
 route. Loss of the map's status polling for 3 seconds also stops it. Offboard
 setpoint loss is configured to switch PX4 to Hold after 0.5 seconds. These are
 implementation limits, not verified flight-safety guarantees. A process restart
@@ -275,16 +321,13 @@ LiDAR ran at approximately 1.0 real-time factor. Two consecutive
 14.4 m from the sensor. Accelerometer and gyro clipping counters were zero.
 The configured collision-prevention parameters were read back from PX4.
 
-The automatic course planner was subsequently built and deployed in the same
-project with all three containers Running. Its live API reported fresh position,
-attitude, global position, and raw LiDAR data. A route preview to north 0 m,
-east 25 m detoured around the southern end of the east wall; local route checks
-also rejected destinations inside the wall, outside the course, and non-finite
-coordinates. The final runtime-speed sample was approximately 1.0 real-time
-factor. The user then took off through QGC; the vehicle was about 2.5 m above
-the origin while the planner remained idle in preview mode.
+The initial synthetic-course validation reported fresh position, attitude,
+global position, and raw LiDAR data. It exercised a detour around the east wall
+before this profile was changed to the open 500 × 500 m local-demo layout. The
+planner now permits destinations out to 250 m from spawn. Automatic route flight,
+stopping clearance, operator takeover, and fault recovery have **not** yet been
+verified in flight.
 
-Automatic route flight, stopping clearance, operator takeover, and fault recovery
-have **not** yet been verified in flight. The planner map port-forward uses
+The planner map port-forward uses
 localhost 8080; the existing QGC tunnel uses localhost 5760. QGC needs to
 reconnect after Pod replacement. Both port-forwards are temporary processes.

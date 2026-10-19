@@ -24,7 +24,7 @@ os.environ["MAVLINK20"] = "1"
 from pymavlink import mavutil
 
 M = mavutil.mavlink
-MAP_LIMIT = 40  # metres north/east of the Gazebo spawn
+MAP_LIMIT = 250  # metres north/east; matches the local demo's 500 m ground grid
 MARGIN = 4.5  # metres, includes vehicle dimensions and tracking margin
 STOP_DISTANCE = 3.5  # metres, leaves room before the static route boundary
 SPEED = 1.0  # m/s maximum horizontal route speed
