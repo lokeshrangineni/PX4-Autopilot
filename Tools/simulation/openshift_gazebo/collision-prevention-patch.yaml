@@ -1,0 +1,43 @@
+# Strategic merge patch: apply after deployment.yaml with oc patch.
+spec:
+  template:
+    spec:
+      containers:
+        - name: px4-gazebo
+          command:
+            - /bin/bash
+            - /etc/px4-demo/start_collision_prevention.sh
+          env:
+            - name: PX4_SIM_MODEL
+              value: gz_x500_lidar_2d
+            - name: PX4_GZ_STANDALONE
+              value: "1"
+            - name: PX4_GZ_WORLD
+              value: avoidance_course
+            - name: PX4_GZ_WORLDS
+              value: /etc/px4-demo
+            - name: LIBGL_ALWAYS_SOFTWARE
+              value: "1"
+            - name: EGL_PLATFORM
+              value: surfaceless
+            # Distances are measured from the sensor, not the propeller tips.
+            - name: PX4_PARAM_CP_DIST
+              value: "3"
+            - name: PX4_PARAM_CP_DELAY
+              value: "0.4"
+            - name: PX4_PARAM_CP_GO_NO_DATA
+              value: "0"
+            - name: PX4_PARAM_CP_GUIDE_ANG
+              value: "30"
+            - name: PX4_PARAM_MPC_POS_MODE
+              value: "4"
+            - name: PX4_PARAM_MPC_VEL_MANUAL
+              value: "2"
+          volumeMounts:
+            - name: collision-prevention-startup
+              mountPath: /etc/px4-demo
+              readOnly: true
+      volumes:
+        - name: collision-prevention-startup
+          configMap:
+            name: px4-collision-prevention-startup

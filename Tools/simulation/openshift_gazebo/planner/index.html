@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PX4 obstacle-course navigator</title>
+<style>
+body{margin:0;background:#101923;color:#eaf2f8;font:16px system-ui,sans-serif}main{max-width:1100px;margin:32px auto;padding:0 24px}h1{font-size:27px;margin-bottom:8px}.muted{color:#aabac8;line-height:1.5}.layout{display:grid;grid-template-columns:minmax(300px,700px) minmax(230px,1fr);gap:24px;margin-top:24px}canvas{width:100%;background:#172632;border:1px solid #405766;border-radius:12px;cursor:crosshair;touch-action:manipulation}aside{background:#182530;border:1px solid #405766;padding:20px;border-radius:12px}button{padding:12px 16px;border:0;border-radius:6px;font:inherit;cursor:pointer;margin:4px 0;width:100%}#preview{background:#dbe8f0}#start{background:#66dfac;color:#082519}#stop{background:#f6b6a9;color:#441e14}button:disabled{opacity:.4;cursor:default}#status{font-weight:600;line-height:1.5}#error{color:#ffbeae;min-height:3em;font-size:14px;line-height:1.4}dl{font-size:14px;line-height:1.6}dt{color:#aabac8}dd{margin:0 0 10px}.legend{font-size:13px;color:#b6c9d6;line-height:1.6}.pill{display:inline-block;background:#264354;padding:5px 9px;border-radius:5px;font-size:12px}@media(max-width:750px){.layout{grid-template-columns:1fr}}
+</style>
+<main>
+<span class="pill">SIMULATION · FIXED ALTITUDE · KNOWN COURSE MAP</span>
+<h1>Navigate around the obstacle course</h1>
+<p class="muted">Click a destination, preview the route, then start from a steady hover. Arm and take off in QGroundControl first. This map shows Gazebo geometry; satellite imagery does not describe this course.</p>
+<div class="layout"><section><canvas id="map" width="720" height="720" aria-label="Obstacle course map. North is up, east is right. Click to select a destination."></canvas><p class="legend">Blue: drone · Orange: obstacles · Shaded: obstacle clearance · Green: planned route · White cross: destination. North is up, east is right. Grid: 10 metres.</p></section>
+<aside><p id="status" role="status">Connecting to simulator…</p><p id="error" role="alert"></p><dl><dt>Vehicle</dt><dd id="vehicle">—</dd><dt>Selected destination</dt><dd id="goal">Click the map</dd><dt>Course origin</dt><dd id="origin">—</dd></dl><button id="preview" disabled>Preview route</button><button id="start" disabled>Start automatic route</button><button id="stop">Stop and hold</button><p class="muted" style="font-size:14px">Fly at 2–5 m above the course origin. The planner preserves altitude and limits speed to 1 m/s. A new LiDAR obstruction stops the route. QGC mode changes cancel it. No automatic arming or takeoff.</p><p class="muted" style="font-size:14px">Use this map for automatic destinations. QGC “Go to location” bypasses this planner.</p></aside></div>
+</main>
+<script>
+const canvas=document.querySelector('#map'),ctx=canvas.getContext('2d');
+let state=null,goal=null,previewed=false,busy=false,polling=false;
+const text=(id,value)=>document.querySelector(id).textContent=value;
+const pixel=(n,e)=>[360+e*8,360-n*8];
+function draw(){ctx.clearRect(0,0,720,720);ctx.strokeStyle='#2b424f';ctx.lineWidth=1;
+ for(let v=-40;v<=40;v+=10){ctx.beginPath();ctx.moveTo(...pixel(v,-40));ctx.lineTo(...pixel(v,40));ctx.moveTo(...pixel(-40,v));ctx.lineTo(...pixel(40,v));ctx.stroke();ctx.fillStyle='#809eae';ctx.font='12px system-ui';ctx.fillText(v+' E',...pixel(-42,v));ctx.fillText(v+' N',...pixel(v,-44));}
+ if(!state)return;
+ for(const b of state.boxes){const [x,y]=pixel(b.n+b.dn,b.e-b.de),m=state.margin*8;ctx.fillStyle='#915b3638';ctx.fillRect(x-m,y-m,b.de*16+2*m,b.dn*16+2*m);ctx.fillStyle='#dc8c4d';ctx.fillRect(x,y,b.de*16,b.dn*16);}
+ if(state.path.length){ctx.beginPath();ctx.strokeStyle='#66dfac';ctx.lineWidth=3;state.path.forEach((p,i)=>{const xy=pixel(...p);i?ctx.lineTo(...xy):ctx.moveTo(...xy)});ctx.stroke();}
+ if(goal){const [x,y]=pixel(goal.north,goal.east);ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.moveTo(x,y-7);ctx.lineTo(x,y+7);ctx.stroke();}
+ if(state.position){const [x,y]=pixel(...state.position);ctx.save();ctx.translate(x,y);ctx.rotate(state.yaw);ctx.beginPath();ctx.moveTo(0,-12);ctx.lineTo(8,9);ctx.lineTo(0,5);ctx.lineTo(-8,9);ctx.closePath();ctx.fillStyle='#79c7ff';ctx.fill();ctx.restore();}
+}
+function buttons(){const active=state&&state.phase!=='idle',healthy=state&&!state.telemetry_error;document.querySelector('#preview').disabled=busy||active||!goal||!healthy;document.querySelector('#start').disabled=busy||active||!goal||!previewed||!healthy||!state.armed;}
+canvas.addEventListener('click',event=>{if(!state||state.phase!=='idle')return;const r=canvas.getBoundingClientRect(),x=(event.clientX-r.left)*720/r.width,y=(event.clientY-r.top)*720/r.height;goal={north:(360-y)/8,east:(x-360)/8};previewed=false;text('goal',`${goal.north.toFixed(1)} m north, ${goal.east.toFixed(1)} m east`);text('error','');draw();buttons();});
+async function command(action){busy=true;buttons();try{const response=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(goal||{})});const data=await response.json();if(!response.ok)throw Error(data.error);previewed=action==='preview';text('error','');}catch(error){text('error',error.message);previewed=false;}finally{busy=false;await poll();buttons();}}
+for(const action of ['preview','start','stop'])document.querySelector('#'+action).onclick=()=>command(action);
+async function poll(){if(polling)return;polling=true;try{const response=await fetch('/api/state',{signal:AbortSignal.timeout(1500)});if(!response.ok)throw Error('Planner unavailable');state=await response.json();text('status',state.reason);const p=state.position;text('vehicle',p?`${state.armed?'Armed':'Disarmed'} · ${(-p[2]).toFixed(1)} m altitude · N ${p[0].toFixed(1)}, E ${p[1].toFixed(1)}`:'Waiting for position');text('origin',`${state.origin[0].toFixed(6)}, ${state.origin[1].toFixed(6)}`);if(state.telemetry_error)text('error',state.telemetry_error);draw();buttons();}catch(error){state=null;previewed=false;text('status','Disconnected from planner');text('error',error.message);buttons();}finally{polling=false;}}
+setInterval(poll,500);poll();draw();
+</script>
+</html>

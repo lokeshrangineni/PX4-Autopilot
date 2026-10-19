@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: px4-gazebo-sitl
+  labels:
+    app.kubernetes.io/name: px4-gazebo-sitl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: px4-gazebo-sitl
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: px4-gazebo-sitl
+    spec:
+      containers:
+        - name: px4-gazebo
+          image: px4io/px4-sitl-gazebo:v1.18.0-beta2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HEADLESS
+              value: "1"
+            - name: PX4_SIM_MODEL
+              value: gz_x500
+            - name: PX4_GZ_WORLD
+              value: baylands
+            - name: GZ_PARTITION
+              value: px4-openshift-demo
+            - name: HOME
+              value: /tmp/px4-home
+            - name: XDG_DATA_HOME
+              value: /tmp/px4-data
+          ports:
+            - name: gz-discovery
+              containerPort: 10317
+              protocol: UDP
+            - name: gz-service-disc
+              containerPort: 10318
+              protocol: UDP
+            - name: mavlink-gcs
+              containerPort: 18570
+              protocol: UDP
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+        - name: mavlink-router
+          image: image-registry.openshift-image-registry.svc:5000/px4-loki-gazebo-demo/mavlink-router:latest
+          imagePullPolicy: Always
+          args:
+            - -e
+            - 127.0.0.1:18570
+          ports:
+            - name: mavlink-tcp
+              containerPort: 5760
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
