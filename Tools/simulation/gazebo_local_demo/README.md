@@ -21,7 +21,7 @@ Motor-failure injection, cameras and optical flow are outside this example.
 From the repository root, run:
 
 ```sh
-bash Tools/simulation/gazebo_demo/run_demo.sh
+bash Tools/simulation/gazebo_local_demo/run_demo.sh
 ```
 
 Keep that terminal open.
@@ -73,7 +73,7 @@ The linked QGroundControl build requires macOS 13 or later.
 
    ```sh
    ulimit -S -n 2048
-   bash Tools/simulation/gazebo_demo/run_demo.sh --build
+   bash Tools/simulation/gazebo_local_demo/run_demo.sh --build
    ```
 
    `--build` runs `make px4_sitl_default` using the activated environment before starting the simulation.
@@ -106,16 +106,16 @@ ROS, Docker, a physical flight controller and a physical joystick are not requir
 
 ```sh
 # Rebuild the SITL target, then launch the full demonstration.
-bash Tools/simulation/gazebo_demo/run_demo.sh --build
+bash Tools/simulation/gazebo_local_demo/run_demo.sh --build
 
 # Use an already-open controller, or run without opening QGroundControl.
-bash Tools/simulation/gazebo_demo/run_demo.sh --no-qgc
+bash Tools/simulation/gazebo_local_demo/run_demo.sh --no-qgc
 
 # Run PX4 and Gazebo without a GUI or opening QGroundControl.
-bash Tools/simulation/gazebo_demo/run_demo.sh --headless --no-qgc
+bash Tools/simulation/gazebo_local_demo/run_demo.sh --headless --no-qgc
 
 # Generate the portable world, texture and server configuration only.
-bash Tools/simulation/gazebo_demo/run_demo.sh --prepare-only
+bash Tools/simulation/gazebo_local_demo/run_demo.sh --prepare-only
 ```
 
 With `--no-qgc`, startup success does not imply flight readiness.

@@ -1,0 +1,21 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: px4-gazebo-vnc
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: px4-gazebo-vnc
+spec:
+  runPolicy: Serial
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: px4-gazebo-vnc:latest

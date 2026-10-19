@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: px4-gazebo-vnc
+spec:
+  selector:
+    app.kubernetes.io/name: px4-gazebo-sitl
+  ports:
+    - name: novnc-http
+      port: 6080
+      targetPort: novnc-http
+      protocol: TCP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: px4-gazebo-vnc
+spec:
+  to:
+    kind: Service
+    name: px4-gazebo-vnc
+  port:
+    targetPort: novnc-http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

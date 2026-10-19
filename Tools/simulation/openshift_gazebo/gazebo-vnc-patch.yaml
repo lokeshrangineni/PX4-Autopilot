@@ -1,0 +1,58 @@
+# Apply after the optional planner profile if it is enabled.
+spec:
+  template:
+    spec:
+      containers:
+        - name: px4-gazebo
+          volumeMounts:
+            - name: gazebo-vnc-tmp
+              mountPath: /tmp/px4-demo-runtime
+        - name: gazebo-vnc
+          image: image-registry.openshift-image-registry.svc:5000/px4-loki-gazebo-demo/px4-gazebo-vnc:latest
+          imagePullPolicy: Always
+          env:
+            - name: GZ_PARTITION
+              value: px4-openshift-demo
+            - name: GZ_SIM_RESOURCE_PATH
+              value: /tmp/models:/opt/px4-gazebo/share/gz/models:/opt/px4-gazebo/share/gz/worlds
+            - name: PX4_GZ_MODELS
+              value: /opt/px4-gazebo/share/gz/models
+            - name: PX4_GZ_WORLDS
+              value: /opt/px4-gazebo/share/gz/worlds
+            - name: HOME
+              value: /tmp/gazebo-vnc-home
+            - name: XDG_CONFIG_HOME
+              value: /tmp/gazebo-vnc-config
+            - name: XDG_CACHE_HOME
+              value: /tmp/gazebo-vnc-cache
+          ports:
+            - name: novnc-http
+              containerPort: 6080
+              protocol: TCP
+          volumeMounts:
+            - name: gazebo-vnc-password
+              mountPath: /var/run/secrets/gazebo-vnc
+              $patch: delete
+            - name: gazebo-vnc-tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: gazebo-vnc-password
+          $patch: delete
+        - name: gazebo-vnc-tmp
+          emptyDir:
+            sizeLimit: 1Gi
